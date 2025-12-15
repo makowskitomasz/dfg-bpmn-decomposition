@@ -1,0 +1,5 @@
+{
+    "Register | Analyze Defect | Inform User | Repair (Complex) | Repair (Simple) | Test Repair | Restart Repair | Archive Repair": "Defect Management Lifecycle",
+    "Inform User | Repair (Complex) | Repair (Simple) | Test Repair | Restart Repair": "Repair Subprocess",
+    "Repair (Simple) | Test Repair | Restart Repair": "Repair Subprocess Variants"
+}
