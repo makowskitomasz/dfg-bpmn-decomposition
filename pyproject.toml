@@ -1,0 +1,48 @@
+[project]
+name = "dfg-bpmn-decomposition"
+version = "0.1.0"
+description = "Process mining experiments around DFG/BPMN decomposition."
+authors = [
+  { name = "Adrian Jaśkowiec" },
+  { name = "Jakub Kubicki" },
+  { name = "Tomasz Makowski" },
+  { name = "Wojciech Neuman" },
+  { name = "Arkadiusz Paterak" },
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "graphviz",
+  "IPython",
+  "ipython",
+  "ipywidgets",
+  "jupyter",
+  "nbconvert",
+  "networkx",
+  "pandas",
+  "pm4py",
+  "pyvis",
+  "openai",
+  "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black",
+  "isort",
+  "pytest",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = [
+  "process_viewer*",
+]
+exclude = [
+  "data*",
+  "notebooks*",
+  "scripts*",
+]
