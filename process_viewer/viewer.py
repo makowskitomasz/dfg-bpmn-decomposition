@@ -41,10 +41,12 @@ class FlowProcessViewer:
         self.out = widgets.Output()
         self.btn_plus = widgets.Button(description="Zoom In", icon="search-plus")
         self.btn_minus = widgets.Button(description="Zoom Out", icon="search-minus")
+        self.slider = widgets.IntSlider(value=self.current_depth, min=0, max=self.max_depth, orientation='vertical')
         self.label = widgets.Label(value=f"Zoom Level: {self.current_depth} / {self.max_depth}")
 
-        self.btn_plus.on_click(self.on_zoom_in)
-        self.btn_minus.on_click(self.on_zoom_out)
+        self.btn_plus.on_click(self.on_zoom_out)
+        self.btn_minus.on_click(self.on_zoom_in)
+        self.slider.observe(self.on_slider_change, names='value')
 
     def _get_max_depth(self, node: ProcessTree, depth: int = 0) -> int:
         """Compute the deepest level underneath a node."""
@@ -128,8 +130,10 @@ class FlowProcessViewer:
 
         if node.operator in [Operator.XOR, Operator.PARALLEL]:
             gw_label = "×" if node.operator == Operator.XOR else "+"
-            g.node(start_id, gw_label, shape="diamond", style="filled", fillcolor="#ffe0b2", height="0.3", width="0.3", fixedsize="true", fontsize="10")
-            g.node(end_id, gw_label, shape="diamond", style="filled", fillcolor="#ffe0b2", height="0.3", width="0.3", fixedsize="true", fontsize="10")
+            g.node(start_id, gw_label, shape="diamond", style="filled", fillcolor="#ffe0b2", height="0.3", width="0.3",
+                   fixedsize="true", fontsize="10")
+            g.node(end_id, gw_label, shape="diamond", style="filled", fillcolor="#ffe0b2", height="0.3", width="0.3",
+                   fixedsize="true", fontsize="10")
             for c_start, c_end in child_boundaries:
                 g.edge(start_id, c_start)
                 g.edge(c_end, end_id)
@@ -154,32 +158,41 @@ class FlowProcessViewer:
             g = graphviz.Digraph(format="png")
             g.attr(rankdir="LR")
             g.attr("node", fontname="Helvetica")
-            g.node("START", "Start", shape="circle", style="filled", fillcolor="#4caf50", fontcolor="white", width="0.6")
-            g.node("END", "End", shape="doublecircle", style="filled", fillcolor="#f44336", fontcolor="white", width="0.6")
+            g.node("START", "Start", shape="circle", style="filled", fillcolor="#4caf50", fontcolor="white",
+                   width="0.6")
+            g.node("END", "End", shape="doublecircle", style="filled", fillcolor="#f44336", fontcolor="white",
+                   width="0.6")
             root_s, root_e = self._add_to_graph(g, self.tree, 0, self.current_depth)
             g.edge("START", root_s)
             g.edge(root_e, "END")
             display(g)
 
-    def on_zoom_in(self, _button) -> None:
+    def on_zoom_out(self, _button) -> None:
         """Increase the zoom level if we haven't reached the maximum."""
         if self.current_depth < self.max_depth:
             self.current_depth += 1
             self.update_ui()
 
-    def on_zoom_out(self, _button) -> None:
+    def on_zoom_in(self, _button) -> None:
         """Decrease the zoom level while keeping it non-negative."""
         if self.current_depth > 0:
             self.current_depth -= 1
             self.update_ui()
 
+    def on_slider_change(self, change):
+        self.current_depth = change['new']
+        self.update_ui()
+
     def update_ui(self) -> None:
         """Refresh the label and re-render the graph for the current depth."""
         self.label.value = f"Zoom Level: {self.current_depth} / {self.max_depth}"
+        if self.slider.value != self.current_depth:
+            self.slider.value = self.current_depth
         self.render()
 
     def show(self) -> None:
         """Display the interactive controls and initial drawing."""
         controls = widgets.HBox([self.btn_minus, self.label, self.btn_plus])
-        display(widgets.VBox([controls, self.out]))
+        widgets_and_graph = widgets.VBox([controls, self.out])
+        display(widgets.HBox([self.slider, widgets_and_graph]))
         self.render()
