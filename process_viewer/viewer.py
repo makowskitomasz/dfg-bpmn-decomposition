@@ -1,198 +1,237 @@
-"""Interactive zoomable visualization of process trees."""
+"""Interactive zoomable visualization of DFG abstraction."""
 
 from __future__ import annotations
 
-from typing import Callable, Iterable, List, Sequence, Tuple
+import copy
+from typing import Callable, Sequence
 
 import graphviz
 import ipywidgets as widgets
-from IPython.display import display
+import networkx as nx
 import pm4py
-from pm4py.objects.process_tree.obj import Operator, ProcessTree
+from IPython.display import display
 
 from .subprocesses_labeler import ACTIVITY_IGNORE, name_subprocesses
 
 
+class TopologicalAbstractor:
+    def __init__(self, event_log, labeler: Callable[[Sequence[str]], str] = name_subprocesses):
+        self.log = event_log
+        self.labeler = labeler
+        self.history = [] 
+        
+        # 1. Base DFG
+        print("📊 Calculating Base DFG...")
+        dfg, start_acts, end_acts = pm4py.discover_dfg(event_log)
+        
+        # 2. Build Graph
+        self.G = nx.DiGraph()
+        
+        # Add edges (creates nodes)
+        for (src, tgt), freq in dfg.items():
+            self.G.add_edge(src, tgt, weight=freq)
+            
+        # Init Node Attributes
+        for node in list(self.G.nodes()):
+            if 'acts' not in self.G.nodes[node]:
+                self.G.nodes[node]['acts'] = [node]
+                self.G.nodes[node]['label'] = str(node)
+                self.G.nodes[node]['type'] = 'atomic'
+
+        # 3. Add Explicit Start/End
+        self.G.add_node("START_NODE", label="Start", type='start', acts=[])
+        self.G.add_node("END_NODE", label="End", type='end', acts=[])
+
+        for act, freq in start_acts.items():
+            if act in self.G.nodes:
+                self.G.add_edge("START_NODE", act, weight=freq)
+        
+        for act, freq in end_acts.items():
+            if act in self.G.nodes:
+                self.G.add_edge(act, "END_NODE", weight=freq)
+
+        # Save Level 0
+        self.history.append(self.get_current_state())
+        
+        # 4. Run Abstraction
+        self.run_abstraction()
+
+    def get_current_state(self):
+        return copy.deepcopy(self.G)
+
+    def run_abstraction(self):
+        """
+        Algorithm:
+        1. Priority 1: Strict Sequences (1-in, 1-out). Cleanest simplification.
+        2. Priority 2: Absorb Weakest Node. 
+           Find the node with the LOWEST total traffic (In+Out). 
+           Merge it into its strongest neighbor.
+        """
+        iteration = 0
+        
+        while self.G.number_of_nodes() > 3: # Keep Start + End + at least 1 Group
+            
+            # --- STRATEGY A: Strict Sequences (Always First) ---
+            candidates = []
+            for u in self.G.nodes():
+                if u in ["START_NODE", "END_NODE"]: continue
+                
+                # Check for 1 IN, 1 OUT pattern
+                if self.G.out_degree(u) == 1:
+                    succ = list(self.G.successors(u))[0]
+                    if succ not in ["START_NODE", "END_NODE"] and self.G.in_degree(succ) == 1:
+                         if u != succ:
+                             candidates.append((u, succ, 'sequence'))
+
+            # --- STRATEGY B: Absorb Weakest Node (Fallback) ---
+            if not candidates:
+                # 1. Calculate 'Total Volume' for every node
+                node_weights = {}
+                for n in self.G.nodes():
+                    if n in ["START_NODE", "END_NODE"]: continue
+                    
+                    weight_in = sum(d['weight'] for _, _, d in self.G.in_edges(n, data=True))
+                    weight_out = sum(d['weight'] for _, _, d in self.G.out_edges(n, data=True))
+                    node_weights[n] = weight_in + weight_out
+                
+                # 2. Find the weakest node
+                if node_weights:
+                    weakest_node = min(node_weights, key=node_weights.get)
+                    
+                    # 3. Find weakest node's strongest neighbor (to merge with)
+                    best_neighbor = None
+                    max_conn_strength = -1
+                    
+                    # Check neighbors (Successors)
+                    for succ in self.G.successors(weakest_node):
+                         if succ in ["START_NODE", "END_NODE"]: continue
+                         w = self.G[weakest_node][succ]['weight']
+                         if w > max_conn_strength:
+                             max_conn_strength = w
+                             best_neighbor = succ
+                    
+                    # Check neighbors (Predecessors)
+                    for pred in self.G.predecessors(weakest_node):
+                         if pred in ["START_NODE", "END_NODE"]: continue
+                         w = self.G[pred][weakest_node]['weight']
+                         if w > max_conn_strength:
+                             max_conn_strength = w
+                             best_neighbor = pred
+                    
+                    if best_neighbor:
+                        u, v = sorted([weakest_node, best_neighbor], key=lambda x: str(x))
+                        candidates.append((u, v, 'weak_absorb'))
+
+            if not candidates:
+                break
+            
+            # --- EXECUTE MERGE ---
+            u, v, method = candidates[0]
+            
+            # Create Group
+            new_id = f"GRP_{iteration}"
+            
+            acts_u = self.G.nodes[u].get('acts', [u])
+            acts_v = self.G.nodes[v].get('acts', [v])
+            new_acts = acts_u + acts_v
+            new_label = self.labeler(new_acts)
+            
+            self.G.add_node(new_id, acts=new_acts, label=new_label, type='group')
+            
+            # Reroute Edges
+            # 1. Incoming to U or V -> New
+            for target in [u, v]:
+                for pred in list(self.G.predecessors(target)):
+                    if pred == u or pred == v: continue 
+                    w = self.G[pred][target]['weight']
+                    if self.G.has_edge(pred, new_id):
+                        self.G[pred][new_id]['weight'] += w
+                    else:
+                        self.G.add_edge(pred, new_id, weight=w)
+
+            # 2. Outgoing from U or V -> New
+            for source in [u, v]:
+                for succ in list(self.G.successors(source)):
+                    if succ == u or succ == v: continue 
+                    w = self.G[source][succ]['weight']
+                    if self.G.has_edge(new_id, succ):
+                        self.G[new_id][succ]['weight'] += w
+                    else:
+                        self.G.add_edge(new_id, succ, weight=w)
+            
+            # Remove old nodes
+            self.G.remove_node(u)
+            self.G.remove_node(v)
+            
+            # Remove self-loops
+            if self.G.has_edge(new_id, new_id):
+                self.G.remove_edge(new_id, new_id)
+            
+            # Save State
+            self.history.append(self.get_current_state())
+            iteration += 1
+
+
 class FlowProcessViewer:
-    """Widget that lets users zoom into process tree fragments."""
+    """Widget that lets users zoom into abstraction levels of a DFG."""
 
-    def __init__(
-        self,
-        log,
-        min_collapse_size: int = 2,
-        labeler: Callable[[Sequence[str]], str] | None = None,
-    ):
-        """Discover the process tree and prepare widget state.
-
-        Args:
-            log: PM4Py event log used to build the process tree.
-            min_collapse_size: Minimum number of visible activities before a
-                subtree gets collapsed at a given zoom level.
-        """
-        self.log = log
-        self.tree: ProcessTree = pm4py.discover_process_tree_inductive(log)
-        self.current_depth = 0
-        self.max_depth = self._get_max_depth(self.tree)
-        self.min_collapse_size = min_collapse_size
-        self._leaf_cache = {}
-        self._size_cache = {}
-        self.labeler = labeler or name_subprocesses
-
+    def __init__(self, event_log, labeler: Callable[[Sequence[str]], str] | None = None):
+        self.engine = TopologicalAbstractor(event_log, labeler=labeler or name_subprocesses)
+        self.steps = self.engine.history
+        self.max_step = len(self.steps) - 1
+        
         self.out = widgets.Output()
-        self.btn_plus = widgets.Button(description="Zoom In", icon="search-plus")
-        self.btn_minus = widgets.Button(description="Zoom Out", icon="search-minus")
-        self.slider = widgets.IntSlider(value=self.current_depth, min=0, max=self.max_depth, orientation='vertical')
-        self.label = widgets.Label(value=f"Zoom Level: {self.current_depth} / {self.max_depth}")
-
-        self.btn_plus.on_click(self.on_zoom_out)
-        self.btn_minus.on_click(self.on_zoom_in)
+        self.slider = widgets.IntSlider(
+            value=0, min=0, max=self.max_step, step=1, 
+            description='Zoom Level:', continuous_update=False
+        )
+        self.label_info = widgets.Label(value="Level 0: Detailed")
         self.slider.observe(self.on_slider_change, names='value')
+        
+    def render_graph(self, nx_graph):
+        dot = graphviz.Digraph(format='png')
+        dot.attr(rankdir='LR')
+        dot.attr('node', fontname='Helvetica', fontsize='10')
+        dot.attr('edge', fontname='Helvetica', fontsize='8', color='#555555')
 
-    def _get_max_depth(self, node: ProcessTree, depth: int = 0) -> int:
-        """Compute the deepest level underneath a node."""
-        if not node.children:
-            return depth
-        return max(self._get_max_depth(child, depth + 1) for child in node.children)
+        edges = list(nx_graph.edges(data=True))
+        max_w = max([d['weight'] for u,v,d in edges]) if edges else 1
 
-    def _leaf_labels(self, node: ProcessTree) -> List[str]:
-        """Collect all activity labels contained within the subtree."""
-        cache_key = id(node)
-        if cache_key in self._leaf_cache:
-            return self._leaf_cache[cache_key]
-
-        if not node.children:
-            label = (node.label or "").strip()
-            labels = [label] if label and label not in ACTIVITY_IGNORE else []
-        else:
-            labels = []
-            for child in node.children:
-                labels.extend(self._leaf_labels(child))
-
-        self._leaf_cache[cache_key] = labels
-        return labels
-
-    def _subtree_size(self, node: ProcessTree) -> int:
-        """Count how many meaningful activities live under the node."""
-        cache_key = id(node)
-        if cache_key in self._size_cache:
-            return self._size_cache[cache_key]
-
-        if not node.children:
-            label = (node.label or "").strip()
-            size = 1 if label and label not in ACTIVITY_IGNORE else 0
-        else:
-            size = sum(self._subtree_size(child) for child in node.children)
-
-        self._size_cache[cache_key] = size
-        return size
-
-    def _is_collapsed(self, node: ProcessTree, current_depth: int, target_depth: int) -> bool:
-        """Determine whether the subtree should be replaced with one box."""
-        if not node.children:
-            return False
-        if current_depth < target_depth:
-            return False
-        return self._subtree_size(node) > self.min_collapse_size
-
-    def _add_to_graph(self, g: graphviz.Digraph, node: ProcessTree, depth: int, target_depth: int) -> Tuple[str, str]:
-        """Recursively add graph nodes/edges for the given process-tree node.
-
-        Returns the entry and exit node ids of the rendered fragment so callers
-        can connect parents and children regardless of whether the fragment was
-        collapsed or expanded.
-        """
-        node_id = str(id(node))
-
-        if self._is_collapsed(node, depth, target_depth):
-            leaves = self._leaf_labels(node)
-            clean_label = self.labeler(leaves)
-            g.node(node_id, label=clean_label, shape="box3d", style="filled", fillcolor="#ffeb3b", fontname="Arial")
-            return node_id, node_id
-
-        if not node.children:
-            if node.label is None:
-                g.node(node_id, "", shape="point", width="0.1")
+        for n, data in nx_graph.nodes(data=True):
+            lbl = data.get('label', str(n))
+            ntype = data.get('type', 'atomic')
+            
+            if ntype == 'start':
+                dot.node(str(n), "Start", shape='circle', style='filled', fillcolor='#4caf50', fontcolor='white', width='0.6')
+            elif ntype == 'end':
+                dot.node(str(n), "End", shape='doublecircle', style='filled', fillcolor='#f44336', fontcolor='white', width='0.6')
+            elif ntype == 'group':
+                dot.node(str(n), lbl, shape='box3d', style='filled', fillcolor='#fff59d', penwidth='1')
             else:
-                g.node(node_id, node.label, shape="box", style="rounded,filled", fillcolor="#e3f2fd", fontname="Arial")
-            return node_id, node_id
+                dot.node(str(n), lbl, shape='box', style='filled,rounded', fillcolor='#e3f2fd')
 
-        child_boundaries = [self._add_to_graph(g, child, depth + 1, target_depth) for child in node.children]
+        for u, v, data in nx_graph.edges(data=True):
+            w = data.get('weight', 1)
+            width = 1.0 + (w / max_w) * 3.0
+            dot.edge(str(u), str(v), label=str(w), penwidth=str(width))
 
-        start_id = f"start_{node_id}"
-        end_id = f"end_{node_id}"
-
-        if node.operator == Operator.SEQUENCE:
-            for i in range(len(child_boundaries) - 1):
-                curr_end = child_boundaries[i][1]
-                next_start = child_boundaries[i + 1][0]
-                g.edge(curr_end, next_start)
-            return child_boundaries[0][0], child_boundaries[-1][1]
-
-        if node.operator in [Operator.XOR, Operator.PARALLEL]:
-            gw_label = "×" if node.operator == Operator.XOR else "+"
-            g.node(start_id, gw_label, shape="diamond", style="filled", fillcolor="#ffe0b2", height="0.3", width="0.3",
-                   fixedsize="true", fontsize="10")
-            g.node(end_id, gw_label, shape="diamond", style="filled", fillcolor="#ffe0b2", height="0.3", width="0.3",
-                   fixedsize="true", fontsize="10")
-            for c_start, c_end in child_boundaries:
-                g.edge(start_id, c_start)
-                g.edge(c_end, end_id)
-            return start_id, end_id
-
-        if node.operator == Operator.LOOP:
-            body_s, body_e = child_boundaries[0]
-            redo_s, redo_e = child_boundaries[1] if len(child_boundaries) > 1 else (None, None)
-            if redo_s:
-                g.edge(body_e, redo_s, label="redo", fontsize="8")
-                g.edge(redo_e, body_s)
-            else:
-                g.edge(body_e, body_s, label="loop", fontsize="8")
-            return body_s, body_e
-
-        return node_id, node_id
-
-    def render(self) -> None:
-        """Draw the current zoom level and show it inside the output widget."""
-        with self.out:
-            self.out.clear_output(wait=True)
-            g = graphviz.Digraph(format="png")
-            g.attr(rankdir="LR")
-            g.attr("node", fontname="Helvetica")
-            g.node("START", "Start", shape="circle", style="filled", fillcolor="#4caf50", fontcolor="white",
-                   width="0.6")
-            g.node("END", "End", shape="doublecircle", style="filled", fillcolor="#f44336", fontcolor="white",
-                   width="0.6")
-            root_s, root_e = self._add_to_graph(g, self.tree, 0, self.current_depth)
-            g.edge("START", root_s)
-            g.edge(root_e, "END")
-            display(g)
-
-    def on_zoom_out(self, _button) -> None:
-        """Increase the zoom level if we haven't reached the maximum."""
-        if self.current_depth < self.max_depth:
-            self.current_depth += 1
-            self.update_ui()
-
-    def on_zoom_in(self, _button) -> None:
-        """Decrease the zoom level while keeping it non-negative."""
-        if self.current_depth > 0:
-            self.current_depth -= 1
-            self.update_ui()
+        return dot
 
     def on_slider_change(self, change):
-        self.current_depth = change['new']
-        self.update_ui()
+        self.update_view()
 
-    def update_ui(self) -> None:
-        """Refresh the label and re-render the graph for the current depth."""
-        self.label.value = f"Zoom Level: {self.current_depth} / {self.max_depth}"
-        if self.slider.value != self.current_depth:
-            self.slider.value = self.current_depth
-        self.render()
+    def update_view(self):
+        with self.out:
+            self.out.clear_output(wait=True)
+            step_idx = self.slider.value
+            graph = self.steps[step_idx]
+            self.label_info.value = f"Level {step_idx}: {graph.number_of_nodes()} Nodes"
+            display(self.render_graph(graph))
 
-    def show(self) -> None:
-        """Display the interactive controls and initial drawing."""
-        controls = widgets.HBox([self.btn_minus, self.label, self.btn_plus])
-        widgets_and_graph = widgets.VBox([controls, self.out])
-        display(widgets.HBox([self.slider, widgets_and_graph]))
-        self.render()
+    def show(self):
+        ui = widgets.VBox([
+            widgets.HBox([self.slider, self.label_info]),
+            self.out
+        ])
+        display(ui)
+        self.update_view()
