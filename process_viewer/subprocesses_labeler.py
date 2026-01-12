@@ -45,36 +45,33 @@ def _tokenize(label: str) -> List[str]:
 
 
 def name_subprocesses(activities_list: Sequence[str]) -> str:
-    """Heuristically label a subprocess using activity names."""
-    clean_acts = [
-        str(act).strip()
-        for act in activities_list
-        if act is not None and str(act).strip() not in ACTIVITY_IGNORE
-    ]
-
+    """Heuristically label a subprocess using activity names (New Refactored Logic)."""
+    clean_acts = [str(a) for a in activities_list if a and str(a).strip() not in ACTIVITY_IGNORE]
     if not clean_acts:
-        return "System Logic"
+        return "Unknown Block"
 
-    unique_acts = list(dict.fromkeys(clean_acts))
-    count = len(unique_acts)
+    # Simple cases
+    if len(clean_acts) == 1:
+        return clean_acts[0]
+    if len(clean_acts) <= 2:
+        return " & ".join(clean_acts)
 
-    if count == 1:
-        return unique_acts[0]
+    # Heuristic for larger groups
+    first, last = clean_acts[0], clean_acts[-1]
 
-    if count <= 3:
-        return " -> ".join(unique_acts)
+    # Find common theme words
+    all_words = " ".join(clean_acts).lower().split()
+    meaningful_words = [w for w in all_words if w not in STOPWORDS and len(w) > 3]
 
-    tokens_per_activity = [_tokenize(act) for act in unique_acts]
-    flattened = [token for tokens in tokens_per_activity for token in tokens]
+    theme = ""
+    if meaningful_words:
+        common_word, freq = Counter(meaningful_words).most_common(1)[0]
+        # If the word appears often enough, use it as a title
+        if freq >= 2:
+            theme = f"[{common_word.capitalize()} Phase]"
 
-    if flattened:
-        word_counter = Counter(flattened)
-        for word, _freq in word_counter.most_common():
-            coverage = sum(1 for tokens in tokens_per_activity if word in tokens)
-            if coverage >= max(2, int(count * 0.4)):
-                return f"{word.capitalize()} Phase"
-
-    return f"{unique_acts[0]} -> {unique_acts[-1]}"
+    count_str = f"({len(clean_acts)} steps)"
+    return f"{theme}\n{first} ... {last}\n{count_str}"
 
 
 def name_subprocesses_with_gpt(activities: Sequence[str]) -> str:
