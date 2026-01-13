@@ -17,9 +17,12 @@ STOPWORDS = {"analyze", "check", "start", "end", "complete", "create", "process"
 
 _SYSTEM_PROMPT = (
     "You name subprocesses in process mining models.\n"
-    "Return up to three concise English words that describe the given list of activities.\n"
-    "Do not add punctuation or explanations.\n"
-    "Use the vocabulary that is common in the process mining domain."
+    "The activity list is unordered and may include repetitions or variants.\n"
+    "Return 2-3 concise English words that capture the shared intent or phase.\n"
+    "Use Title Case words like 'Repair Cycle' (capitalize each word).\n"
+    "Do not add punctuation, numbering, or explanations.\n"
+    "Prefer domain terms (e.g., registration, analysis, repair, notification).\n"
+    "Avoid listing activity names verbatim."
 )
 
 load_dotenv()
@@ -79,7 +82,7 @@ def name_subprocesses_with_gpt(activities: Sequence[str]) -> str:
     if _client is None:
         return name_subprocesses(activities)
 
-    unique = [act for act in dict.fromkeys(a.strip() for a in activities if a)]
+    unique = sorted({a.strip() for a in activities if a})
     if not unique:
         return "System Logic"
 
@@ -87,7 +90,7 @@ def name_subprocesses_with_gpt(activities: Sequence[str]) -> str:
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    prompt = "Activities: " + "; ".join(unique[:20])
+    prompt = "Activities (unordered): " + "; ".join(unique[:20])
     print(f"GPT Prompt: {prompt}")
     try:
         response = _client.chat.completions.create(

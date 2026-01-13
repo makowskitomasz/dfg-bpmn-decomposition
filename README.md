@@ -23,6 +23,22 @@ Process Mining Project 2025/2026: automatically decompose complex Directly-Follo
 - `Makefile` – targets for build/run/format/test/clean based on the venv.
 - `pyproject.toml` – dependency list and package configuration.
 
+## Milestone 1
+This milestone demonstrates DFG decomposition with an interactive zoomable viewer and two abstraction strategies.
+
+### FlowProcessViewer
+`FlowProcessViewer` builds the initial DFG from the event log and stores a history of abstraction steps. The widget exposes a zoom slider that renders any step as a Graphviz diagram. It takes an `abstractor_cls` so you can switch between strategies without changing the UI code.
+
+### TopologicalAbstractor
+`TopologicalAbstractor` is a simple baseline driven by local structure. It first collapses strict sequences where a node has exactly one predecessor and one successor, which preserves clear linear flow. When no such sequences remain, it finds the node with the lowest total traffic (sum of incoming and outgoing edge weights) and merges it into its strongest neighbor by edge weight. This reduces noise early and keeps high-traffic hubs intact longer. Each merge produces a new history level so the viewer can zoom through intermediate abstractions.
+
+### SCCModularityAbstractor
+`SCCModularityAbstractor` focuses on structural cohesion. It first collapses strongly connected components to stabilize loops and recurring cycles. If no SCCs remain, it detects communities using modularity on an undirected, weighted view of the DFG, which tends to group dense regions. To avoid big jumps, when a detected group has more than three nodes it merges only the strongest internal pair (highest-weight edge). It also prefers merges that do not include previously merged group nodes when possible, so multiple groups can emerge in parallel. This produces finer-grained levels and keeps the abstraction smooth instead of collapsing large regions at once.
+
+### Subprocess Labeling
+`name_subprocesses_with_gpt` calls `gpt-5-nano` and caches results in `data/subprocesses_labels.json`. The cache key is order-independent, so the same set of activities maps to one label. Labels are requested in Title Case (e.g., "Repair Cycle").  
+`name_subprocesses` is the offline fallback that builds a label from activity text (first/last + common theme word).
+
 ## Current Status
 - Repair-example log is ingested, converted to an event log, and a process tree is discovered via Inductive Miner.
 - `FlowProcessViewer` renders the tree as a graph, allowing zooming in/out by collapsing/expanding subtrees.
