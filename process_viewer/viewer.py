@@ -3,57 +3,94 @@
 from __future__ import annotations
 
 import copy
-from typing import Callable, Sequence
+from typing import Callable, Sequence, Type
 
 import graphviz
 import ipywidgets as widgets
 import networkx as nx
 import pm4py
 from IPython.display import display
+from networkx.algorithms.community import greedy_modularity_communities
 
 from .subprocesses_labeler import ACTIVITY_IGNORE, name_subprocesses
+
+
+def _build_base_graph(event_log: pm4py.objects.log.obj.EventLog) -> nx.DiGraph:
+    print("📊 Calculating Base DFG...")
+    dfg, start_acts, end_acts = pm4py.discover_dfg(event_log)
+
+    graph = nx.DiGraph()
+    for (src, tgt), freq in dfg.items():
+        graph.add_edge(src, tgt, weight=freq)
+
+    for node in list(graph.nodes()):
+        if 'acts' not in graph.nodes[node]:
+            graph.nodes[node]['acts'] = [node]
+            graph.nodes[node]['label'] = str(node)
+            graph.nodes[node]['type'] = 'atomic'
+
+    graph.add_node("START_NODE", label="Start", type='start', acts=[])
+    graph.add_node("END_NODE", label="End", type='end', acts=[])
+
+    for act, freq in start_acts.items():
+        if act in graph.nodes:
+            graph.add_edge("START_NODE", act, weight=freq)
+
+    for act, freq in end_acts.items():
+        if act in graph.nodes:
+            graph.add_edge(act, "END_NODE", weight=freq)
+
+    return graph
+
+
+def _merge_nodes(
+    graph: nx.DiGraph,
+    nodes: Sequence[str],
+    new_id: str,
+    labeler: Callable[[Sequence[str]], str],
+) -> None:
+    nodes_set = set(nodes)
+    acts = []
+    for n in nodes_set:
+        acts.extend(graph.nodes[n].get('acts', [n]))
+    graph.add_node(new_id, acts=acts, label=labeler(acts), type='group')
+
+    for target in nodes_set:
+        for pred in list(graph.predecessors(target)):
+            if pred in nodes_set:
+                continue
+            w = graph[pred][target]['weight']
+            if graph.has_edge(pred, new_id):
+                graph[pred][new_id]['weight'] += w
+            else:
+                graph.add_edge(pred, new_id, weight=w)
+
+    for source in nodes_set:
+        for succ in list(graph.successors(source)):
+            if succ in nodes_set:
+                continue
+            w = graph[source][succ]['weight']
+            if graph.has_edge(new_id, succ):
+                graph[new_id][succ]['weight'] += w
+            else:
+                graph.add_edge(new_id, succ, weight=w)
+
+    for n in nodes_set:
+        graph.remove_node(n)
+
+    if graph.has_edge(new_id, new_id):
+        graph.remove_edge(new_id, new_id)
 
 
 class TopologicalAbstractor:
     def __init__(self, event_log, labeler: Callable[[Sequence[str]], str] = name_subprocesses):
         self.log = event_log
         self.labeler = labeler
-        self.history = [] 
-        
-        # 1. Base DFG
-        print("📊 Calculating Base DFG...")
-        dfg, start_acts, end_acts = pm4py.discover_dfg(event_log)
-        
-        # 2. Build Graph
-        self.G = nx.DiGraph()
-        
-        # Add edges (creates nodes)
-        for (src, tgt), freq in dfg.items():
-            self.G.add_edge(src, tgt, weight=freq)
-            
-        # Init Node Attributes
-        for node in list(self.G.nodes()):
-            if 'acts' not in self.G.nodes[node]:
-                self.G.nodes[node]['acts'] = [node]
-                self.G.nodes[node]['label'] = str(node)
-                self.G.nodes[node]['type'] = 'atomic'
+        self.history = []
 
-        # 3. Add Explicit Start/End
-        self.G.add_node("START_NODE", label="Start", type='start', acts=[])
-        self.G.add_node("END_NODE", label="End", type='end', acts=[])
+        self.G = _build_base_graph(event_log)
 
-        for act, freq in start_acts.items():
-            if act in self.G.nodes:
-                self.G.add_edge("START_NODE", act, weight=freq)
-        
-        for act, freq in end_acts.items():
-            if act in self.G.nodes:
-                self.G.add_edge(act, "END_NODE", weight=freq)
-
-        # Save Level 0
         self.history.append(self.get_current_state())
-        
-        # 4. Run Abstraction
         self.run_abstraction()
 
     def get_current_state(self):
@@ -175,8 +212,13 @@ class TopologicalAbstractor:
 class FlowProcessViewer:
     """Widget that lets users zoom into abstraction levels of a DFG."""
 
-    def __init__(self, event_log, labeler: Callable[[Sequence[str]], str] | None = None):
-        self.engine = TopologicalAbstractor(event_log, labeler=labeler or name_subprocesses)
+    def __init__(
+        self,
+        event_log,
+        labeler: Callable[[Sequence[str]], str] | None = None,
+        abstractor_cls: Type[TopologicalAbstractor] = TopologicalAbstractor,
+    ):
+        self.engine = abstractor_cls(event_log, labeler=labeler or name_subprocesses)
         self.steps = self.engine.history
         self.max_step = len(self.steps) - 1
         
@@ -235,3 +277,161 @@ class FlowProcessViewer:
         ])
         display(ui)
         self.update_view()
+
+
+class SCCModularityAbstractor:
+    def __init__(self, event_log, labeler: Callable[[Sequence[str]], str] = name_subprocesses):
+        self.log = event_log
+        self.labeler = labeler
+        self.history = []
+
+        self.G = _build_base_graph(event_log)
+
+        self.history.append(self.get_current_state())
+        self.run_abstraction()
+
+    def get_current_state(self):
+        return copy.deepcopy(self.G)
+
+    def _internal_weight(self, nodes: Sequence[str]) -> float:
+        total = 0.0
+        nodes_set = set(nodes)
+        for u, v, data in self.G.edges(data=True):
+            if u in nodes_set and v in nodes_set:
+                total += data.get('weight', 1)
+        return total
+
+    def _best_pair_in_group(self, nodes: Sequence[str]) -> list[str] | None:
+        nodes_set = set(nodes)
+        best = None
+        best_w = -1.0
+        for u, v, data in self.G.edges(data=True):
+            if u in nodes_set and v in nodes_set:
+                w = data.get('weight', 1)
+                if w > best_w:
+                    best_w = w
+                    best = [u, v]
+        return best
+
+    def _best_pair_avoiding_groups(self, nodes: Sequence[str]) -> list[str] | None:
+        nodes_set = set(nodes)
+        group_nodes = {n for n in nodes_set if self.G.nodes[n].get('type') == 'group'}
+        candidates = []
+        for u, v, data in self.G.edges(data=True):
+            if u in nodes_set and v in nodes_set:
+                w = data.get('weight', 1)
+                uses_group = u in group_nodes or v in group_nodes
+                candidates.append((uses_group, -w, [u, v]))
+        if not candidates:
+            return None
+        candidates.sort()
+        return candidates[0][2]
+
+    def _select_best_group(
+        self, groups: Sequence[Sequence[str]], prefer_atomic: bool = True
+    ) -> list[str] | None:
+        candidates = []
+        for group in groups:
+            group = [n for n in group if n not in {"START_NODE", "END_NODE"}]
+            if len(group) <= 1:
+                continue
+            has_group_nodes = any(self.G.nodes[n].get('type') == 'group' for n in group)
+            candidates.append((has_group_nodes, len(group), self._internal_weight(group), group))
+        if not candidates:
+            return None
+        # Prefer groups without existing group nodes, then smaller merges.
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        return candidates[0][3]
+
+    def run_abstraction(self):
+        iteration = 0
+        cooldowns: dict[str, int] = {}
+
+        while self.G.number_of_nodes() > 3:
+            for node in list(cooldowns.keys()):
+                cooldowns[node] -= 1
+                if cooldowns[node] <= 0:
+                    cooldowns.pop(node, None)
+
+            # Phase 1: collapse SCCs to stabilize loops.
+            sccs = [
+                list(comp)
+                for comp in nx.strongly_connected_components(self.G)
+                if len(comp) > 1
+                and "START_NODE" not in comp
+                and "END_NODE" not in comp
+            ]
+            best_scc = self._select_best_group(
+                self._filter_groups_for_cooldown(sccs, cooldowns, allow_fallback=True)
+            )
+            if best_scc:
+                if len(best_scc) > 3:
+                    pair = self._best_pair_avoiding_groups(best_scc)
+                    if pair:
+                        new_id = f"SCC_{iteration}"
+                        _merge_nodes(self.G, pair, new_id, self.labeler)
+                        iteration += 1
+                        cooldowns[new_id] = 1
+                        self.history.append(self.get_current_state())
+                        continue
+                new_id = f"SCC_{iteration}"
+                _merge_nodes(self.G, best_scc, new_id, self.labeler)
+                iteration += 1
+                cooldowns[new_id] = 1
+                self.history.append(self.get_current_state())
+                continue
+
+            # Phase 2: community detection via modularity on undirected view.
+            undirected = nx.Graph()
+            for u, v, data in self.G.edges(data=True):
+                if u in {"START_NODE", "END_NODE"} or v in {"START_NODE", "END_NODE"}:
+                    continue
+                w = data.get('weight', 1)
+                if undirected.has_edge(u, v):
+                    undirected[u][v]['weight'] += w
+                else:
+                    undirected.add_edge(u, v, weight=w)
+
+            if undirected.number_of_nodes() < 2:
+                break
+
+            communities = greedy_modularity_communities(undirected, weight='weight')
+            groups = [list(c) for c in communities if len(c) > 1]
+            best_group = self._select_best_group(
+                self._filter_groups_for_cooldown(groups, cooldowns, allow_fallback=True)
+            )
+            if not best_group:
+                break
+
+            if len(best_group) > 3:
+                pair = self._best_pair_avoiding_groups(best_group)
+                if pair:
+                    new_id = f"MOD_{iteration}"
+                    _merge_nodes(self.G, pair, new_id, self.labeler)
+                    iteration += 1
+                    cooldowns[new_id] = 1
+                    self.history.append(self.get_current_state())
+                    continue
+
+            new_id = f"MOD_{iteration}"
+            _merge_nodes(self.G, best_group, new_id, self.labeler)
+            iteration += 1
+            cooldowns[new_id] = 1
+            self.history.append(self.get_current_state())
+
+    def _filter_groups_for_cooldown(
+        self,
+        groups: Sequence[Sequence[str]],
+        cooldowns: dict[str, int],
+        allow_fallback: bool = True,
+    ) -> list[list[str]]:
+        if not cooldowns:
+            return [list(g) for g in groups]
+        filtered = [
+            [n for n in g if n not in {"START_NODE", "END_NODE"}]
+            for g in groups
+            if all(n not in cooldowns for n in g)
+        ]
+        if filtered:
+            return filtered
+        return [list(g) for g in groups] if allow_fallback else []
