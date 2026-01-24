@@ -111,13 +111,12 @@ class TopologicalAbstractor:
             # --- STRATEGY A: Strict Sequences (Always First) ---
             candidates = []
             for u in self.G.nodes():
-                if _is_boundary_node(self.G, u):
-                    continue
+                if u in ["START_NODE", "END_NODE"]: continue
                 
                 # Check for 1 IN, 1 OUT pattern
                 if self.G.out_degree(u) == 1:
                     succ = list(self.G.successors(u))[0]
-                    if not _is_boundary_node(self.G, succ) and self.G.in_degree(succ) == 1:
+                    if succ not in ["START_NODE", "END_NODE"] and self.G.in_degree(succ) == 1:
                          if u != succ:
                              candidates.append((u, succ, 'sequence'))
 
@@ -126,7 +125,7 @@ class TopologicalAbstractor:
                 # 1. Calculate 'Total Volume' for every node
                 node_weights = {}
                 for n in self.G.nodes():
-                    if _is_boundary_node(self.G, n): continue
+                    if n in ["START_NODE", "END_NODE"]: continue
                     
                     weight_in = sum(d['weight'] for _, _, d in self.G.in_edges(n, data=True))
                     weight_out = sum(d['weight'] for _, _, d in self.G.out_edges(n, data=True))
@@ -142,7 +141,7 @@ class TopologicalAbstractor:
                     
                     # Check neighbors (Successors)
                     for succ in self.G.successors(weakest_node):
-                         if _is_boundary_node(self.G, succ): continue
+                         if succ in ["START_NODE", "END_NODE"]: continue
                          w = self.G[weakest_node][succ]['weight']
                          if w > max_conn_strength:
                              max_conn_strength = w
@@ -150,7 +149,7 @@ class TopologicalAbstractor:
                     
                     # Check neighbors (Predecessors)
                     for pred in self.G.predecessors(weakest_node):
-                         if _is_boundary_node(self.G, pred): continue
+                         if pred in ["START_NODE", "END_NODE"]: continue
                          w = self.G[pred][weakest_node]['weight']
                          if w > max_conn_strength:
                              max_conn_strength = w
@@ -210,18 +209,14 @@ class TopologicalAbstractor:
             iteration += 1
 
 
-def _is_boundary_node(G: nx.DiGraph, n: str) -> bool:
-    return G.nodes[n].get("type") in {"start", "end"}
-
-
-class FlowProcessViewer:
+class DFGFlowProcessViewer:
     """Widget that lets users zoom into abstraction levels of a DFG."""
 
     def __init__(
         self,
         event_log,
         labeler: Callable[[Sequence[str]], str] | None = None,
-        abstractor_cls: type = TopologicalAbstractor,
+        abstractor_cls: Type[TopologicalAbstractor] = TopologicalAbstractor,
     ):
         self.engine = abstractor_cls(event_log, labeler=labeler or name_subprocesses)
         self.steps = self.engine.history
@@ -234,8 +229,6 @@ class FlowProcessViewer:
         )
         self.label_info = widgets.Label(value="Level 0: Detailed")
         self.slider.observe(self.on_slider_change, names='value')
-
-        self.show_edges_label = abstractor_cls.__name__ in ("TopologicalAbstractor", "SCCModularityAbstractor")
         
     def render_graph(self, nx_graph):
         dot = graphviz.Digraph(format='png')
@@ -262,8 +255,7 @@ class FlowProcessViewer:
         for u, v, data in nx_graph.edges(data=True):
             w = data.get('weight', 1)
             width = 1.0 + (w / max_w) * 3.0
-            edge_label = str(w) if self.show_edges_label else ""
-            dot.edge(str(u), str(v), label=edge_label, penwidth=str(width))
+            dot.edge(str(u), str(v), label=str(w), penwidth=str(width))
 
         return dot
 
@@ -365,7 +357,9 @@ class SCCModularityAbstractor:
             sccs = [
                 list(comp)
                 for comp in nx.strongly_connected_components(self.G)
-                    if len(comp) > 1 and not any(_is_boundary_node(self.G, n) for n in comp)
+                if len(comp) > 1
+                and "START_NODE" not in comp
+                and "END_NODE" not in comp
             ]
             best_scc = self._select_best_group(
                 self._filter_groups_for_cooldown(sccs, cooldowns, allow_fallback=True)

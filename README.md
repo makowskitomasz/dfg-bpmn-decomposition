@@ -14,7 +14,7 @@ Process Mining Project 2025/2026: automatically decompose complex Directly-Follo
 ## Repository Structure
 - `data/` – sample event logs plus `subprocesses_labels.json` cache for GPT-generated names.
 - `process_viewer/` – reusable package with the zoomable viewer and labeling utilities.
-  - `viewer.py` – `FlowProcessViewer` widget with depth-based collapsing.
+  - `viewer.py` – `DFGFlowProcessViewer` widget with depth-based collapsing.
   - `subprocesses_labeler.py` – heuristics + optional GPT labeler with caching.
 - `notebooks/`
   - `overview.ipynb` – introductory material (log loading, basic discovery).
@@ -26,8 +26,8 @@ Process Mining Project 2025/2026: automatically decompose complex Directly-Follo
 ## Milestone 1
 This milestone demonstrates DFG decomposition with an interactive zoomable viewer and two abstraction strategies.
 
-### FlowProcessViewer
-`FlowProcessViewer` builds the initial DFG from the event log and stores a history of abstraction steps. The widget exposes a zoom slider that renders any step as a Graphviz diagram. It takes an `abstractor_cls` so you can switch between strategies without changing the UI code.
+### DFGFlowProcessViewer
+`DFGFlowProcessViewer` builds the initial DFG from the event log and stores a history of abstraction steps. The widget exposes a zoom slider that renders any step as a Graphviz diagram. It takes an `abstractor_cls` so you can switch between strategies without changing the UI code.
 
 ### TopologicalAbstractor
 `TopologicalAbstractor` is a simple baseline driven by local structure. It first collapses strict sequences where a node has exactly one predecessor and one successor, which preserves clear linear flow. When no such sequences remain, it finds the node with the lowest total traffic (sum of incoming and outgoing edge weights) and merges it into its strongest neighbor by edge weight. This reduces noise early and keeps high-traffic hubs intact longer. Each merge produces a new history level so the viewer can zoom through intermediate abstractions.
@@ -41,7 +41,7 @@ This milestone demonstrates DFG decomposition with an interactive zoomable viewe
 
 ## Current Status
 - Repair-example log is ingested, converted to an event log, and a process tree is discovered via Inductive Miner.
-- `FlowProcessViewer` renders the tree as a graph, allowing zooming in/out by collapsing/expanding subtrees.
+- `DFGFlowProcessViewer` renders the tree as a graph, allowing zooming in/out by collapsing/expanding subtrees.
 - Subprocess labeling works in two modes: heuristic (offline) and GPT-powered (`gpt-5-nano`), with caching of remote responses.
 - Notebooks are split into overview and milestone parts, so the project presentation can gradually drill into the solution.
 - Tooling (Makefile + pyproject) prepares a reproducible venv, formatting, and testing hooks.
