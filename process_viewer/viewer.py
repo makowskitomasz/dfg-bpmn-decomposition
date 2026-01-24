@@ -216,7 +216,7 @@ class FlowProcessViewer:
         self,
         event_log,
         labeler: Callable[[Sequence[str]], str] | None = None,
-        abstractor_cls: Type[TopologicalAbstractor] = TopologicalAbstractor,
+        abstractor_cls: type = TopologicalAbstractor,
     ):
         self.engine = abstractor_cls(event_log, labeler=labeler or name_subprocesses)
         self.steps = self.engine.history
@@ -229,6 +229,8 @@ class FlowProcessViewer:
         )
         self.label_info = widgets.Label(value="Level 0: Detailed")
         self.slider.observe(self.on_slider_change, names='value')
+
+        self.show_edges_label = abstractor_cls.__name__ in ("TopologicalAbstractor", "SCCModularityAbstractor")
         
     def render_graph(self, nx_graph):
         dot = graphviz.Digraph(format='png')
@@ -255,7 +257,8 @@ class FlowProcessViewer:
         for u, v, data in nx_graph.edges(data=True):
             w = data.get('weight', 1)
             width = 1.0 + (w / max_w) * 3.0
-            dot.edge(str(u), str(v), label=str(w), penwidth=str(width))
+            edge_label = str(w) if self.show_edges_label else ""
+            dot.edge(str(u), str(v), label=edge_label, penwidth=str(width))
 
         return dot
 
