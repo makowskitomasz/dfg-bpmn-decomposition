@@ -1,9 +1,3 @@
-# process_viewer/bpmn_adapter.py
-"""
-Adapter: PM4Py BPMN model -> DFG-like NetworkX graph
-so existing abstractors + FlowProcessViewer can be reused.
-"""
-
 from __future__ import annotations
 from typing import Any, Dict
 
@@ -12,7 +6,7 @@ from pm4py.objects.bpmn.obj import BPMN
 
 
 def _bpmn_display_label(node) -> str:
-    # Use name if present and meaningful
+    """Generate a display label for a BPMN node."""
     if getattr(node, "name", None):
         return str(node.name)
 
@@ -30,7 +24,6 @@ def _bpmn_display_label(node) -> str:
     if isinstance(node, BPMN.SubProcess):
         return "Subprocess"
 
-    # Task/activity without a name is rare; keep it generic
     return "Task"
 
 
