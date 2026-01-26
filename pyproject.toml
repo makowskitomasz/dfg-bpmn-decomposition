@@ -24,7 +24,8 @@ dependencies = [
   "pyvis",
   "openai",
   "python-dotenv",
-  "imageio"
+  "imageio",
+  "bpmn_python"
 ]
 
 [project.optional-dependencies]

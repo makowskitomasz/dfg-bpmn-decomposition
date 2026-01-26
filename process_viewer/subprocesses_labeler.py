@@ -28,6 +28,8 @@ _SYSTEM_PROMPT = (
 load_dotenv()
 _API_KEY = os.getenv("OPENAI_API_KEY")
 _client = OpenAI(api_key=_API_KEY) if _API_KEY else None
+print("OPENAI_API_KEY loaded:", bool(_API_KEY))
+print("OpenAI client created:", _client is not None)
 
 _CACHE_FILE = Path(__file__).resolve().parent.parent / "data" / "subprocesses_labels.json"
 if _CACHE_FILE.exists():

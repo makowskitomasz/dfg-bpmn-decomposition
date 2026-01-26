@@ -44,5 +44,14 @@
     "Admission IC": "ICU Admission",
     "Admission NC | CRP | IV Antibiotics | LacticAcid | Leucocytes": "Clinical Evaluation",
     "Admission NC | CRP | ER Sepsis Triage | IV Antibiotics | IV Liquid | LacticAcid | Leucocytes": "Sepsis Assessment",
-    "Admission NC | CRP | ER Registration | ER Sepsis Triage | ER Triage | IV Antibiotics | IV Liquid | LacticAcid | Leucocytes": "Registration Triage"
+    "Admission NC | CRP | ER Registration | ER Sepsis Triage | ER Triage | IV Antibiotics | IV Liquid | LacticAcid | Leucocytes": "Registration Triage",
+    "Register": "Registration Process",
+    "Analyze Defect": "Defect Analysis",
+    "Repair (Complex)": "Complex Repair",
+    "Test Repair": "Repair Cycle",
+    "Restart Repair": "Repair Cycle",
+    "Inform User": "User Notification",
+    "Archive Repair": "Data Maintenance",
+    "Archive Repair | Inform User": "Repair Lifecycle",
+    "Archive Repair | Inform User | Repair (Complex)": "Repair Process"
 }

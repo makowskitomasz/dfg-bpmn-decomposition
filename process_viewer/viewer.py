@@ -209,7 +209,7 @@ class TopologicalAbstractor:
             iteration += 1
 
 
-class FlowProcessViewer:
+class DFGFlowProcessViewer:
     """Widget that lets users zoom into abstraction levels of a DFG."""
 
     def __init__(

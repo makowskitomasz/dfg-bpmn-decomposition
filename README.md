@@ -14,7 +14,7 @@ Process Mining Project 2025/2026: automatically decompose complex Directly-Follo
 ## Repository Structure
 - `data/` – sample event logs plus `subprocesses_labels.json` cache for GPT-generated names.
 - `process_viewer/` – reusable package with the zoomable viewer and labeling utilities.
-  - `viewer.py` – `FlowProcessViewer` widget with depth-based collapsing.
+  - `viewer.py` – `DFGFlowProcessViewer` widget with depth-based collapsing.
   - `subprocesses_labeler.py` – heuristics + optional GPT labeler with caching.
 - `notebooks/`
   - `overview.ipynb` – introductory material (log loading, basic discovery).
@@ -26,8 +26,8 @@ Process Mining Project 2025/2026: automatically decompose complex Directly-Follo
 ## Milestone 1
 This milestone demonstrates DFG decomposition with an interactive zoomable viewer and two abstraction strategies.
 
-### FlowProcessViewer
-`FlowProcessViewer` builds the initial DFG from the event log and stores a history of abstraction steps. The widget exposes a zoom slider that renders any step as a Graphviz diagram. It takes an `abstractor_cls` so you can switch between strategies without changing the UI code.
+### DFGFlowProcessViewer
+`DFGFlowProcessViewer` builds the initial DFG from the event log and stores a history of abstraction steps. The widget exposes a zoom slider that renders any step as a Graphviz diagram. It takes an `abstractor_cls` so you can switch between strategies without changing the UI code.
 
 ### TopologicalAbstractor
 `TopologicalAbstractor` is a simple baseline driven by local structure. It first collapses strict sequences where a node has exactly one predecessor and one successor, which preserves clear linear flow. When no such sequences remain, it finds the node with the lowest total traffic (sum of incoming and outgoing edge weights) and merges it into its strongest neighbor by edge weight. This reduces noise early and keeps high-traffic hubs intact longer. Each merge produces a new history level so the viewer can zoom through intermediate abstractions.
@@ -39,9 +39,16 @@ This milestone demonstrates DFG decomposition with an interactive zoomable viewe
 `name_subprocesses_with_gpt` calls `gpt-5-nano` and caches results in `data/subprocesses_labels.json`. The cache key is order-independent, so the same set of activities maps to one label. Labels are requested in Title Case (e.g., "Repair Cycle").  
 `name_subprocesses` is the offline fallback that builds a label from activity text (first/last + common theme word).
 
+## Milestone 2 – BPMN (Process Tree–Based Abstraction)
+
+This milestone extends the zoomable abstraction approach to **BPMN models**, using a **process-tree–based representation** discovered from the event log. Instead of abstracting BPMN as a flat graph, we leverage the hierarchical structure of **process trees** to preserve BPMN control-flow semantics.
+
+### BPMNFlowProcessViewer
+`BPMNFlowProcessViewer` builds a **process tree** from the event log using the Inductive Miner (`pm4py.discover_process_tree_inductive`). The viewer renders the tree as a BPMN-like Graphviz diagram and supports **interactive zooming** by collapsing or expanding subtrees based on depth.
+
 ## Current Status
 - Repair-example log is ingested, converted to an event log, and a process tree is discovered via Inductive Miner.
-- `FlowProcessViewer` renders the tree as a graph, allowing zooming in/out by collapsing/expanding subtrees.
+- `DFGFlowProcessViewer` renders the tree as a graph, allowing zooming in/out by collapsing/expanding subtrees.
 - Subprocess labeling works in two modes: heuristic (offline) and GPT-powered (`gpt-5-nano`), with caching of remote responses.
 - Notebooks are split into overview and milestone parts, so the project presentation can gradually drill into the solution.
 - Tooling (Makefile + pyproject) prepares a reproducible venv, formatting, and testing hooks.
