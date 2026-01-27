@@ -22,7 +22,8 @@ _SYSTEM_PROMPT = (
     "Use Title Case words like 'Repair Cycle' (capitalize each word).\n"
     "Do not add punctuation, numbering, or explanations.\n"
     "Prefer domain terms (e.g., registration, analysis, repair, notification).\n"
-    "Avoid listing activity names verbatim."
+    "Avoid listing activity names verbatim.\n"
+    "Never reuse the same label for different activity sets; if a label already exists, refine it to keep labels unique and informative."
 )
 
 load_dotenv()
@@ -47,6 +48,34 @@ def _tokenize(label: str) -> List[str]:
         return []
     tokens = re.findall(r"[A-Za-z]+", label.lower())
     return [tok for tok in tokens if tok not in STOPWORDS and len(tok) > 3]
+
+
+def _normalize_activity(act: str) -> str:
+    """Trim and coerce activity to string, keeping empty string out."""
+    return str(act).strip()
+
+
+def _cache_key_with_counts(activities: Sequence[str]) -> str:
+    """Stable cache key that differentiates inputs by multiplicity."""
+    counts = Counter(_normalize_activity(a) for a in activities if _normalize_activity(a))
+    return " | ".join(f"{act}:{counts[act]}" for act in sorted(counts))
+
+
+def _existing_labels_hint(max_items: int = 10) -> str:
+    """Compact hint with cached labels to guide uniqueness in the prompt."""
+    if not _CACHE:
+        return ""
+    items = list(_CACHE.items())[:max_items]
+    return "; ".join(f"{k} -> {v}" for k, v in items)
+
+
+def _ensure_unique_label(label: str, cache_key: str) -> str:
+    """Guarantee that a label is not reused for a different activity set."""
+    duplicates = [k for k, v in _CACHE.items() if v.lower() == label.lower() and k != cache_key]
+    if not duplicates:
+        return label
+    # Suffix avoids collision while keeping intent visible to the user.
+    return f"{label} #{len(duplicates) + 1}"
 
 
 def name_subprocesses(activities_list: Sequence[str]) -> str:
@@ -84,15 +113,21 @@ def name_subprocesses_with_gpt(activities: Sequence[str]) -> str:
     if _client is None:
         return name_subprocesses(activities)
 
-    unique = sorted({a.strip() for a in activities if a})
-    if not unique:
+    cache_key = _cache_key_with_counts(activities)
+    if not cache_key:
         return "System Logic"
 
-    cache_key = " | ".join(unique)
     if cache_key in _CACHE:
         return _CACHE[cache_key]
 
-    prompt = "Activities (unordered): " + "; ".join(unique[:20])
+    counts = Counter(_normalize_activity(a) for a in activities if _normalize_activity(a))
+    prompt = "Activities (unordered, with counts): " + "; ".join(
+        f"{act} x{counts[act]}" for act in sorted(counts)
+    )
+
+    labels_hint = _existing_labels_hint()
+    if labels_hint:
+        prompt += "\nExisting labels: " + labels_hint
     print(f"GPT Prompt: {prompt}")
     try:
         response = _client.chat.completions.create(
@@ -106,7 +141,7 @@ def name_subprocesses_with_gpt(activities: Sequence[str]) -> str:
 
         text = response.choices[0].message.content.strip()
         print(f"GPT Response: {text}")
-        label = text[:60] or "System Logic"
+        label = _ensure_unique_label(text[:60] or "System Logic", cache_key)
 
         try:
             if text:
